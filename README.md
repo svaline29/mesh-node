@@ -8,8 +8,10 @@ It implements a basic distance vector routing protocol. Nodes store and update a
 The network topology is as follows:
 
 A - B - C - F - G
+
     |           |
     D - E       H - I
+    
                     |
                     J
 
