@@ -1,0 +1,14 @@
+{
+    "nodes": {
+      "A": {"port": 5001, "neighbors": ["B", "D"]},
+      "B": {"port": 5002, "neighbors": ["A", "C"]},
+      "C": {"port": 5003, "neighbors": ["B", "F"]},
+      "D": {"port": 5004, "neighbors": ["A", "E"]},
+      "E": {"port": 5005, "neighbors": ["D"]},
+      "F": {"port": 5006, "neighbors": ["C", "G", "H"]},
+      "G": {"port": 5007, "neighbors": ["F"]},
+      "H": {"port": 5008, "neighbors": ["F", "I"]},
+      "I": {"port": 5009, "neighbors": ["H", "J"]},
+      "J": {"port": 5010, "neighbors": ["I"]}
+    }
+  }
