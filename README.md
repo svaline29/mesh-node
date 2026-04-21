@@ -14,10 +14,8 @@ When a node receives a neighbor's routing table via gossip, it runs Bellman-Ford
 The topology as current configured is stored in config.json. This can be edited and the program will run using the updated version, the one I have right now is this:
 
 A - B - C - F - G
-
     |           |
     D - E       H - I
-    
                     |
                     J
 
