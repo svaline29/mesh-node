@@ -101,6 +101,7 @@ stay reproducible.
 | `FALSE_TOPOLOGY` | Inject `fake` destinations/links (`{dest: cost}`) that don't exist. |
 | `FLAPPING` | Alternate advertised cost between `low`/`high` every `period` gossip rounds — induces instability. |
 | `SELECTIVE` | Apply `inner` attacks only toward `victims`; advertise honestly to everyone else (hardest to detect). |
+| `COLLUSION` | A `group` of nodes tell the identical coordinated lie and vouch for each other (`vouch_cost`), fabricating a consensus that defeats cross-source consistency. |
 
 ```json
 "attackers": {
@@ -120,6 +121,17 @@ python3 launcher.py --config examples/attack_false_cost.json --seed 1
 
 See `examples/attack_false_cost.json`, `examples/attack_flapping.json`, and
 `examples/attack_selective.json`.
+
+### Collusion and the Byzantine threshold
+
+A single liar is an outlier and cross-source consistency can flag it. Colluding
+nodes corroborate one another's false advertisements, so honest observers see a
+fabricated consensus instead. `examples/attack_collusion_{1,2,3}.json` are
+matched scenarios (the same lie, told by groups of size 1, 2, and 3) so the
+benchmarking harness can measure exactly how detection degrades as the colluding
+group grows — i.e. characterize the Byzantine threshold honestly rather than
+claiming robustness the system doesn't have. `attacks.malicious_nodes()` and
+`attacks.colluding_groups()` expose the ground truth for scoring.
 
 ## Manual test checklist
 
@@ -148,6 +160,7 @@ Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poiso
 - **Convergence measured two ways.** Live UDP wall-clock (noisy, reported as-is) plus deterministic round counts from the harness (seed-reproducible, later phase).
 - **Attacks are advertisement transforms, not special node code.** Modeling adversarial behavior as a pure transform on the outgoing vector keeps malice cleanly separated, composable, testable, and identical between the live sim and the harness. The node stays honest; only its advertisement is rewritten per recipient (which is also what makes the `SELECTIVE` attack possible).
 - **Attacks are gated and clocked by gossip round, not wall-clock.** `start_round` and `FLAPPING`'s `period` are expressed in gossip rounds so adversarial runs are reproducible.
+- **Collusion is modeled explicitly, not hidden.** Cross-source consistency is fundamentally a majority argument and can be overwhelmed by a coordinated minority. Rather than pretend otherwise, the `COLLUSION` mode and matched size-1/2/3 scenarios let the harness quantify where detection breaks down (the Byzantine threshold).
 
 ## Next steps
 
@@ -157,6 +170,6 @@ Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poiso
 - [x] Weighted per-link costs and least-cost path calculation
 - [x] Split horizon with poison reverse (`--split-horizon`)
 - [x] Convergence detection (`observer.py`)
-- [x] Adversarial node simulation (false cost/topology, flapping, selective)
+- [x] Adversarial node simulation (false cost/topology, flapping, selective, collusion)
 - [ ] Cross-source gossip verification and anomaly detection
 - [ ] Detection accuracy benchmarking
