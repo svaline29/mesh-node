@@ -9,9 +9,11 @@ import threading
 import sys
 import json
 import time
-import copy
+import random
 import signal
 import argparse
+
+import routing
 
 GOSSIP_INTERVAL = 2
 HEARTBEAT_INTERVAL = 1
@@ -19,15 +21,24 @@ HEARTBEAT_TIMEOUT = 5
 
 parser = argparse.ArgumentParser()
 parser.add_argument("node_id")
+parser.add_argument("--config", default="config.json")
 parser.add_argument("--port", type=int)
 parser.add_argument("--neighbors", nargs="*", default=None)
+parser.add_argument("--split-horizon", dest="split_horizon", choices=["on", "off"], default="on",
+                    help="split horizon with poison reverse (on) vs naive distance-vector (off)")
+parser.add_argument("--seed", type=int, default=None,
+                    help="seed node-local randomness for reproducible runs")
 args = parser.parse_args()
 
 node_id = args.node_id
 join_mode = args.port is not None
+split_horizon = args.split_horizon == "on"
+
+if args.seed is not None:
+    random.seed(args.seed)
 
 #import the config file and load it into a dictionary
-with open("config.json") as f:
+with open(args.config) as f:
     config = json.load(f)
 
 nodes = config["nodes"]
@@ -39,25 +50,50 @@ if join_mode:
     for neighbor in neighbor_ids:
         if neighbor in nodes:
             known_nodes[neighbor] = nodes[neighbor]["port"]
+    #joining nodes default to unit link cost unless the config already lists the link
+    configured = routing.link_costs_from_config(config, node_id)
+    link_costs = {nb: configured.get(nb, 1) for nb in neighbor_ids}
 else:
     port = nodes[node_id]["port"]
-    neighbor_ids = list(nodes[node_id]["neighbors"])
+    link_costs = routing.link_costs_from_config(config, node_id)
+    neighbor_ids = list(link_costs.keys())
     known_nodes = {nid: info["port"] for nid, info in nodes.items()}
 
 #creates a socket object on IPv4 (that's AF_INET) and UDP (that's SOCK_DGRAM)
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 #binds it to localhost and the correct port number
 sock.bind(('localhost', port))
 
-#create a routing table for the node using distance vector routing
-#all neighbors cost 1, self cost is 0
+#routing state. The table is *derived* by re-running weighted Bellman-Ford over
+#the most recent distance vector advertised by each neighbor, so we cache those
+#vectors and recompute on every change instead of merging in place.
+neighbor_vectors = {}
 routing_table = {}
-for neighbor in neighbor_ids:
-    routing_table[neighbor] = {"cost": 1, "next_hop": neighbor}
-routing_table[node_id] = {"cost": 0, "next_hop": node_id}
 last_seen = {neighbor: time.time() for neighbor in neighbor_ids}
 dead_nodes = set()
+gossip_round = 0
+last_change_time = time.time()
 lock = threading.Lock()
+
+
+def recompute():
+    """Rebuild the routing table from cached neighbor vectors and link costs."""
+    global last_change_time
+    with lock:
+        live_links = dict(link_costs)
+        vectors = {
+            nb: {d: c for d, c in vec.items() if d not in dead_nodes}
+            for nb, vec in neighbor_vectors.items()
+            if nb in live_links
+        }
+    new_table = routing.compute_table(node_id, live_links, vectors)
+    with lock:
+        changed = new_table != routing_table
+        if changed:
+            routing_table.clear()
+            routing_table.update(new_table)
+            last_change_time = time.time()
+    return changed
 
 
 def get_neighbors():
@@ -67,7 +103,9 @@ def get_neighbors():
 
 def send_to(neighbor_id, message):
     with lock:
-        neighbor_port = known_nodes[neighbor_id]
+        neighbor_port = known_nodes.get(neighbor_id)
+    if neighbor_port is None:
+        return
     payload = json.dumps(message).encode()
     sock.sendto(payload, ("localhost", neighbor_port))
 
@@ -86,22 +124,30 @@ def add_neighbor(neighbor_id, neighbor_port):
         is_new = neighbor_id not in neighbor_ids
         if is_new:
             neighbor_ids.append(neighbor_id)
-            routing_table[neighbor_id] = {"cost": 1, "next_hop": neighbor_id}
+            configured = routing.link_costs_from_config(config, node_id)
+            link_costs[neighbor_id] = configured.get(neighbor_id, 1)
             last_seen[neighbor_id] = time.time()
+    if is_new:
+        recompute()
 
 
 def absorb_dead_nodes(reported):
-    for dead_id in reported:
-        with lock:
-            is_new = dead_id not in dead_nodes
-            dead_nodes.add(dead_id)
-        if is_new:
-            purge_routes_via(dead_id)
+    new_dead = False
+    with lock:
+        for dead_id in reported:
+            if dead_id not in dead_nodes:
+                dead_nodes.add(dead_id)
+                new_dead = True
+    if new_dead:
+        recompute()
 
 
 def handle_gossip(message):
     absorb_dead_nodes(message.get("dead_nodes", []))
-    update_routing_table(message["from"], message["table"])
+    sender = message["from"]
+    with lock:
+        neighbor_vectors[sender] = dict(message["table"])
+    recompute()
 
 
 def handle_heartbeat(message):
@@ -110,6 +156,24 @@ def handle_heartbeat(message):
 
 def handle_withdraw(message):
     mark_neighbor_dead(message["from"])
+
+
+def handle_status_request(message):
+    """Reply to the convergence observer with our current state."""
+    reply_port = message.get("reply_port")
+    if reply_port is None:
+        return
+    with lock:
+        snapshot = {
+            "type": "status",
+            "from": node_id,
+            "table": {d: info["cost"] for d, info in routing_table.items()},
+            "last_change": last_change_time,
+            "round": gossip_round,
+            "neighbors": list(neighbor_ids),
+        }
+    payload = json.dumps(snapshot).encode()
+    sock.sendto(payload, ("localhost", reply_port))
 
 
 def handle_hello(message):
@@ -133,13 +197,16 @@ def handle_hello(message):
 
 
 def handle_message(message):
-    sender = message["from"]
     msg_type = message["type"]
 
     if msg_type == "hello":
         handle_hello(message)
         return
+    if msg_type == "status_request":
+        handle_status_request(message)
+        return
 
+    sender = message["from"]
     with lock:
         if sender not in neighbor_ids:
             return
@@ -152,26 +219,17 @@ def handle_message(message):
         handle_withdraw(message)
 
 
-def purge_routes_via(dead_id):
-    purged = []
-    with lock:
-        for dest in list(routing_table.keys()):
-            if dest == dead_id or routing_table[dest]["next_hop"] == dead_id:
-                purged.append(dest)
-                del routing_table[dest]
-    if purged:
-        print(f"[{node_id}] ROUTE_PURGED via {dead_id}: {purged}", flush=True)
-
-
 def mark_neighbor_dead(neighbor_id):
     with lock:
         if neighbor_id not in neighbor_ids:
             return
         neighbor_ids.remove(neighbor_id)
+        link_costs.pop(neighbor_id, None)
+        neighbor_vectors.pop(neighbor_id, None)
         last_seen.pop(neighbor_id, None)
         dead_nodes.add(neighbor_id)
     print(f"[{node_id}] NEIGHBOR_DOWN {neighbor_id}", flush=True)
-    purge_routes_via(neighbor_id)
+    recompute()
 
 
 def monitor_neighbors():
@@ -185,33 +243,6 @@ def monitor_neighbors():
                 mark_neighbor_dead(neighbor_id)
 
 
-#updates the routing table with the received table from a neighbor
-def update_routing_table(neighbor_id, received_table):
-    updated = False
-    with lock: #locked copy
-        table_copy = copy.deepcopy(routing_table)
-        local_dead = set(dead_nodes)
-    
-    #update the routing table with the received table
-    for dest, info in received_table.items():
-        if dest == node_id or dest in local_dead: #skip self and known-dead nodes
-            continue
-        new_cost = 1 + info["cost"] #add 1 to the cost of the received table
-        if dest not in table_copy or new_cost < table_copy[dest]["cost"]: #if the destination is not in the table or the new cost is less than the current cost
-            table_copy[dest] = {"cost": new_cost, "next_hop": neighbor_id} #update the routing table with the new cost and next hop
-            updated = True #set updated to true to indicate that the routing table was updated
-
-    for dest in list(table_copy.keys()):
-        if dest == node_id:
-            continue
-        if table_copy[dest]["next_hop"] == neighbor_id and dest not in received_table:
-            del table_copy[dest]
-            updated = True
-    
-    if updated: #if the routing table was updated
-        with lock: #locked update
-            routing_table.update(table_copy) #update the routing table with the new table
-
 #gossips the routing table to the other nodes
 def heartbeat():
     while True:
@@ -222,26 +253,34 @@ def heartbeat():
 
 
 def gossip():
+    global gossip_round
     while True: #gossip every 2 seconds
         time.sleep(GOSSIP_INTERVAL)
-        with lock: #locked copy
-            table_copy = copy.deepcopy(routing_table)
+        with lock:
+            table_copy = {d: dict(info) for d, info in routing_table.items()}
             dead_copy = list(dead_nodes)
-        
-        message = {
-            "type": "gossip",
-            "from": node_id,
-            "table": table_copy,
-            "dead_nodes": dead_copy,
-        }
-        
+            gossip_round += 1
+
+        #build a per-recipient advertisement so split horizon / poison reverse
+        #can suppress routes learned from that very neighbor
         for neighbor_id in get_neighbors():
+            advertisement = routing.build_advertisement(
+                table_copy, neighbor_id,
+                split_horizon=split_horizon, poison_reverse=split_horizon,
+            )
+            message = {
+                "type": "gossip",
+                "from": node_id,
+                "table": advertisement,
+                "dead_nodes": dead_copy,
+            }
             send_to(neighbor_id, message)
+
 
 #listens for messages from other nodes
 def listen():
     while True: #listen for messages forever
-        data, addr = sock.recvfrom(4096)
+        data, addr = sock.recvfrom(8192)
         message = json.loads(data.decode()) #decode the message
         handle_message(message)
 
@@ -260,6 +299,9 @@ def on_sigterm(signum, frame):
 
 
 signal.signal(signal.SIGTERM, on_sigterm)
+
+#seed the table with the zero-cost self route and direct links
+recompute()
 
 #start the listen, gossip, heartbeat, and monitor threads.
 threading.Thread(target=listen, daemon=True).start()
