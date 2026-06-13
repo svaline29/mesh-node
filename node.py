@@ -11,23 +11,38 @@ import json
 import time
 import copy
 import signal
+import argparse
 
 GOSSIP_INTERVAL = 2
 HEARTBEAT_INTERVAL = 1
 HEARTBEAT_TIMEOUT = 5
 
+parser = argparse.ArgumentParser()
+parser.add_argument("node_id")
+parser.add_argument("--port", type=int)
+parser.add_argument("--neighbors", nargs="*", default=None)
+args = parser.parse_args()
+
+node_id = args.node_id
+join_mode = args.port is not None
+
 #import the config file and load it into a dictionary
 with open("config.json") as f:
     config = json.load(f)
 
-#get the node id from the command line arguments
-node_id = sys.argv[1]
-
-#get nodes, corresponding port, and all neighbor ids from the loaded config
 nodes = config["nodes"]
-port = nodes[node_id]["port"]
-neighbor_ids = list(nodes[node_id]["neighbors"])
-known_nodes = {nid: info["port"] for nid, info in nodes.items()}
+
+if join_mode:
+    port = args.port
+    neighbor_ids = list(args.neighbors or [])
+    known_nodes = {node_id: port}
+    for neighbor in neighbor_ids:
+        if neighbor in nodes:
+            known_nodes[neighbor] = nodes[neighbor]["port"]
+else:
+    port = nodes[node_id]["port"]
+    neighbor_ids = list(nodes[node_id]["neighbors"])
+    known_nodes = {nid: info["port"] for nid, info in nodes.items()}
 
 #creates a socket object on IPv4 (that's AF_INET) and UDP (that's SOCK_DGRAM)
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
@@ -63,6 +78,18 @@ def touch_last_seen(sender):
             last_seen[sender] = time.time()
 
 
+def add_neighbor(neighbor_id, neighbor_port):
+    with lock:
+        if neighbor_id in dead_nodes:
+            dead_nodes.discard(neighbor_id)
+        known_nodes[neighbor_id] = neighbor_port
+        is_new = neighbor_id not in neighbor_ids
+        if is_new:
+            neighbor_ids.append(neighbor_id)
+            routing_table[neighbor_id] = {"cost": 1, "next_hop": neighbor_id}
+            last_seen[neighbor_id] = time.time()
+
+
 def absorb_dead_nodes(reported):
     for dead_id in reported:
         with lock:
@@ -85,17 +112,43 @@ def handle_withdraw(message):
     mark_neighbor_dead(message["from"])
 
 
+def handle_hello(message):
+    sender = message["from"]
+    sender_port = message["port"]
+    sender_neighbors = message.get("neighbors", [])
+
+    with lock:
+        we_know_them = sender in neighbor_ids
+    they_know_us = node_id in sender_neighbors
+
+    if we_know_them or they_know_us:
+        add_neighbor(sender, sender_port)
+        reply = {
+            "type": "hello",
+            "from": node_id,
+            "port": port,
+            "neighbors": get_neighbors(),
+        }
+        send_to(sender, reply)
+
+
 def handle_message(message):
     sender = message["from"]
+    msg_type = message["type"]
+
+    if msg_type == "hello":
+        handle_hello(message)
+        return
+
     with lock:
         if sender not in neighbor_ids:
             return
     touch_last_seen(sender)
-    if message["type"] == "gossip":
+    if msg_type == "gossip":
         handle_gossip(message)
-    elif message["type"] == "heartbeat":
+    elif msg_type == "heartbeat":
         handle_heartbeat(message)
-    elif message["type"] == "withdraw":
+    elif msg_type == "withdraw":
         handle_withdraw(message)
 
 
@@ -193,6 +246,12 @@ def listen():
         handle_message(message)
 
 
+def send_bootstrap_hello():
+    message = {"type": "hello", "from": node_id, "port": port, "neighbors": get_neighbors()}
+    for neighbor_id in get_neighbors():
+        send_to(neighbor_id, message)
+
+
 def on_sigterm(signum, frame):
     message = {"type": "withdraw", "from": node_id}
     for neighbor_id in get_neighbors():
@@ -207,6 +266,9 @@ threading.Thread(target=listen, daemon=True).start()
 threading.Thread(target=gossip, daemon=True).start()
 threading.Thread(target=heartbeat, daemon=True).start()
 threading.Thread(target=monitor_neighbors, daemon=True).start()
+
+if join_mode:
+    send_bootstrap_hello()
 
 
 while True: #main thread to print the routing table every second
