@@ -8,10 +8,22 @@ import sys
 import time
 import os
 import threading
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", default="config.json")
+parser.add_argument("--split-horizon", dest="split_horizon", choices=["on", "off"], default="on")
+parser.add_argument("--seed", type=int, default=None)
+cli = parser.parse_args()
 
 #load in config
-with open("config.json") as f:
+with open(cli.config) as f:
     config = json.load(f)
+
+#shared flags forwarded to every node process
+node_flags = ["--config", cli.config, "--split-horizon", cli.split_horizon]
+if cli.seed is not None:
+    node_flags += ["--seed", str(cli.seed)]
 
 #create the logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
@@ -23,7 +35,7 @@ used_ports = {info["port"] for info in config["nodes"].values()}
 def start_node(node_id, extra_args=None):
     log = open(f"logs/{node_id}.log", "w")
     log_files[node_id] = log
-    cmd = [sys.executable, "node.py", node_id]
+    cmd = [sys.executable, "node.py", node_id, *node_flags]
     if extra_args:
         cmd.extend(extra_args)
     p = subprocess.Popen(cmd, stdout=log, stderr=log)
@@ -72,6 +84,7 @@ for node_id in config["nodes"]:
     start_node(node_id)
     time.sleep(0.1)
 
+print(f"split-horizon: {cli.split_horizon}")
 print("commands: join <id> <port> <neighbor>..., leave <id>")
 threading.Thread(target=command_loop, daemon=True).start()
 
