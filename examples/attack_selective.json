@@ -1,0 +1,37 @@
+{
+  "_comment": "Node F lies only to C (claims cost 0 to A/E/J) while staying honest to G and H. Single neighbors see consistent behavior; only cross-source comparison between F's neighbors reveals the inconsistency. F also injects a phantom destination 'Z9' toward C.",
+  "nodes": {
+    "A": {"port": 5001},
+    "B": {"port": 5002},
+    "C": {"port": 5003},
+    "D": {"port": 5004},
+    "E": {"port": 5005},
+    "F": {"port": 5006},
+    "G": {"port": 5007},
+    "H": {"port": 5008},
+    "I": {"port": 5009},
+    "J": {"port": 5010}
+  },
+  "links": [
+    {"a": "A", "b": "B", "cost": 2},
+    {"a": "A", "b": "D", "cost": 1},
+    {"a": "B", "b": "C", "cost": 3},
+    {"a": "C", "b": "F", "cost": 1},
+    {"a": "D", "b": "E", "cost": 5},
+    {"a": "F", "b": "G", "cost": 2},
+    {"a": "F", "b": "H", "cost": 1},
+    {"a": "H", "b": "I", "cost": 4},
+    {"a": "I", "b": "J", "cost": 1}
+  ],
+  "attackers": {
+    "F": {
+      "start_round": 3,
+      "modes": [
+        {"type": "SELECTIVE", "victims": ["C"], "inner": [
+          {"type": "FALSE_COST", "targets": ["A", "E", "J"], "cost": 0},
+          {"type": "FALSE_TOPOLOGY", "fake": {"Z9": 1}}
+        ]}
+      ]
+    }
+  }
+}
