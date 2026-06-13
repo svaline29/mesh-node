@@ -119,3 +119,44 @@ def test_unknown_attack_type_raises():
     import pytest
     with pytest.raises(ValueError):
         attacks.build_attack({"type": "BOGUS"})
+
+
+# --- collusion -------------------------------------------------------------
+
+def test_collusion_advertises_shared_lie_to_targets():
+    atk = attacks.Collusion(group=["F", "H"], targets=["A", "E"], cost=0)
+    ad = atk.apply(HONEST, ctx(node_id="F", recipient="C"))
+    assert ad["A"] == 0 and ad["E"] == 0
+
+
+def test_collusion_vouches_for_accomplices():
+    atk = attacks.Collusion(group=["F", "H"], targets=["A"], cost=0, vouch_cost=1)
+    ad = atk.apply(HONEST, ctx(node_id="F", recipient="C"))
+    assert ad["H"] == 1          # cheap route advertised toward accomplice
+    assert ad["F"] == 0          # self route untouched (no vouching for self)
+
+
+def test_colluders_tell_identical_stories():
+    # Two colluders with the same coordinated parameters corroborate each other:
+    # an honest observer hearing both sees agreement, not an outlier.
+    group, targets = ["F", "H"], ["A", "E"]
+    f = attacks.Collusion(group=group, targets=targets, cost=0)
+    h = attacks.Collusion(group=group, targets=targets, cost=0)
+    f_ad = f.apply(HONEST, ctx(node_id="F", recipient="C"))
+    h_ad = h.apply(HONEST, ctx(node_id="H", recipient="C"))
+    assert f_ad["A"] == h_ad["A"] == 0
+    assert f_ad["E"] == h_ad["E"] == 0
+
+
+def test_colluding_groups_and_malicious_nodes_from_config():
+    config = {
+        "attackers": {
+            "F": {"start_round": 3, "modes": [
+                {"type": "COLLUSION", "group": ["F", "H"], "targets": ["A"], "cost": 0}]},
+            "H": {"start_round": 3, "modes": [
+                {"type": "COLLUSION", "group": ["F", "H"], "targets": ["A"], "cost": 0}]},
+        }
+    }
+    assert attacks.malicious_nodes(config) == {"F", "H"}
+    groups = attacks.colluding_groups(config)
+    assert groups == [frozenset({"F", "H"})]   # de-duplicated across members

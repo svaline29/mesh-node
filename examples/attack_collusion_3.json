@@ -1,0 +1,46 @@
+{
+  "_comment": "Collusion size 3: F, H, and I all corroborate the same lie (cost 0 to A and E) and vouch for one another. As the fake consensus grows it can outweigh the honest one -- this is the Byzantine-threshold regime where cross-source consistency is expected to fail.",
+  "nodes": {
+    "A": {"port": 5001},
+    "B": {"port": 5002},
+    "C": {"port": 5003},
+    "D": {"port": 5004},
+    "E": {"port": 5005},
+    "F": {"port": 5006},
+    "G": {"port": 5007},
+    "H": {"port": 5008},
+    "I": {"port": 5009},
+    "J": {"port": 5010}
+  },
+  "links": [
+    {"a": "A", "b": "B", "cost": 2},
+    {"a": "A", "b": "D", "cost": 1},
+    {"a": "B", "b": "C", "cost": 3},
+    {"a": "C", "b": "F", "cost": 1},
+    {"a": "D", "b": "E", "cost": 5},
+    {"a": "F", "b": "G", "cost": 2},
+    {"a": "F", "b": "H", "cost": 1},
+    {"a": "H", "b": "I", "cost": 4},
+    {"a": "I", "b": "J", "cost": 1}
+  ],
+  "attackers": {
+    "F": {
+      "start_round": 3,
+      "modes": [
+        {"type": "COLLUSION", "group": ["F", "H", "I"], "targets": ["A", "E"], "cost": 0}
+      ]
+    },
+    "H": {
+      "start_round": 3,
+      "modes": [
+        {"type": "COLLUSION", "group": ["F", "H", "I"], "targets": ["A", "E"], "cost": 0}
+      ]
+    },
+    "I": {
+      "start_round": 3,
+      "modes": [
+        {"type": "COLLUSION", "group": ["F", "H", "I"], "targets": ["A", "E"], "cost": 0}
+      ]
+    }
+  }
+}
