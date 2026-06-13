@@ -21,8 +21,8 @@ node_id = sys.argv[1]
 #get nodes, corresponding port, and all neighbor ids from the loaded config
 nodes = config["nodes"]
 port = nodes[node_id]["port"]
-neighbor_ids = nodes[node_id]["neighbors"]
-
+neighbor_ids = list(nodes[node_id]["neighbors"])
+known_nodes = {nid: info["port"] for nid, info in nodes.items()}
 
 #creates a socket object on IPv4 (that's AF_INET) and UDP (that's SOCK_DGRAM)
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
@@ -36,6 +36,27 @@ for neighbor in neighbor_ids:
     routing_table[neighbor] = {"cost": 1, "next_hop": neighbor}
 routing_table[node_id] = {"cost": 0, "next_hop": node_id}
 lock = threading.Lock()
+
+
+def get_neighbors():
+    with lock:
+        return list(neighbor_ids)
+
+
+def send_to(neighbor_id, message):
+    with lock:
+        neighbor_port = known_nodes[neighbor_id]
+    payload = json.dumps(message).encode()
+    sock.sendto(payload, ("localhost", neighbor_port))
+
+
+def handle_gossip(message):
+    update_routing_table(message["from"], message["table"])
+
+
+def handle_message(message):
+    if message["type"] == "gossip":
+        handle_gossip(message)
 
 
 #updates the routing table with the received table from a neighbor
@@ -64,24 +85,21 @@ def gossip():
         with lock: #locked copy
             table_copy = copy.deepcopy(routing_table) 
         
-        payload = json.dumps({ #create the payload to send to the other nodes
+        message = {
             "type": "gossip",
             "from": node_id,
             "table": table_copy
-        }).encode()
+        }
         
-        for neighbor_id in neighbor_ids: #send to all neighbors
-            neighbor_port = nodes[neighbor_id]["port"] #get the port of the neighbor
-            sock.sendto(payload, ("localhost", neighbor_port)) #send the payload to the neighbor
+        for neighbor_id in get_neighbors():
+            send_to(neighbor_id, message)
 
 #listens for messages from other nodes
 def listen():
     while True: #listen for messages forever
         data, addr = sock.recvfrom(4096)
         message = json.loads(data.decode()) #decode the message
-        
-        if message["type"] == "gossip": #if the message is a gossip message
-            update_routing_table(message["from"], message["table"]) #update the routing table with the received table
+        handle_message(message)
 
 
 #start the listen and gossip threads. 
