@@ -11,6 +11,9 @@ import json
 import time
 import copy
 
+GOSSIP_INTERVAL = 2
+HEARTBEAT_INTERVAL = 1
+
 #import the config file and load it into a dictionary
 with open("config.json") as f:
     config = json.load(f)
@@ -35,6 +38,7 @@ routing_table = {}
 for neighbor in neighbor_ids:
     routing_table[neighbor] = {"cost": 1, "next_hop": neighbor}
 routing_table[node_id] = {"cost": 0, "next_hop": node_id}
+last_seen = {neighbor: time.time() for neighbor in neighbor_ids}
 lock = threading.Lock()
 
 
@@ -50,13 +54,26 @@ def send_to(neighbor_id, message):
     sock.sendto(payload, ("localhost", neighbor_port))
 
 
+def touch_last_seen(sender):
+    with lock:
+        if sender in neighbor_ids:
+            last_seen[sender] = time.time()
+
+
 def handle_gossip(message):
     update_routing_table(message["from"], message["table"])
 
 
+def handle_heartbeat(message):
+    pass
+
+
 def handle_message(message):
+    touch_last_seen(message["from"])
     if message["type"] == "gossip":
         handle_gossip(message)
+    elif message["type"] == "heartbeat":
+        handle_heartbeat(message)
 
 
 #updates the routing table with the received table from a neighbor
@@ -79,9 +96,17 @@ def update_routing_table(neighbor_id, received_table):
             routing_table.update(table_copy) #update the routing table with the new table
 
 #gossips the routing table to the other nodes
+def heartbeat():
+    while True:
+        time.sleep(HEARTBEAT_INTERVAL)
+        message = {"type": "heartbeat", "from": node_id}
+        for neighbor_id in get_neighbors():
+            send_to(neighbor_id, message)
+
+
 def gossip():
     while True: #gossip every 2 seconds
-        time.sleep(2)
+        time.sleep(GOSSIP_INTERVAL)
         with lock: #locked copy
             table_copy = copy.deepcopy(routing_table) 
         
@@ -102,9 +127,10 @@ def listen():
         handle_message(message)
 
 
-#start the listen and gossip threads. 
+#start the listen, gossip, and heartbeat threads. 
 threading.Thread(target=listen, daemon=True).start()
 threading.Thread(target=gossip, daemon=True).start()
+threading.Thread(target=heartbeat, daemon=True).start()
 
 
 while True: #main thread to print the routing table every second
