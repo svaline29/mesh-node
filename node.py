@@ -14,6 +14,7 @@ import signal
 import argparse
 
 import routing
+import attacks
 
 GOSSIP_INTERVAL = 2
 HEARTBEAT_INTERVAL = 1
@@ -73,7 +74,12 @@ last_seen = {neighbor: time.time() for neighbor in neighbor_ids}
 dead_nodes = set()
 gossip_round = 0
 last_change_time = time.time()
+start_time = time.time()
 lock = threading.Lock()
+
+#optional adversarial behavior for this node (None for honest nodes)
+attacker = attacks.from_config(config, node_id)
+attack_announced = False
 
 
 def recompute():
@@ -253,13 +259,18 @@ def heartbeat():
 
 
 def gossip():
-    global gossip_round
+    global gossip_round, attack_announced
     while True: #gossip every 2 seconds
         time.sleep(GOSSIP_INTERVAL)
         with lock:
             table_copy = {d: dict(info) for d, info in routing_table.items()}
             dead_copy = list(dead_nodes)
             gossip_round += 1
+            this_round = gossip_round
+
+        if attacker and attacker.active(this_round) and not attack_announced:
+            print(f"[{node_id}] ATTACK_ACTIVE round={this_round}: {attacker.describe()}", flush=True)
+            attack_announced = True
 
         #build a per-recipient advertisement so split horizon / poison reverse
         #can suppress routes learned from that very neighbor
@@ -268,6 +279,13 @@ def gossip():
                 table_copy, neighbor_id,
                 split_horizon=split_horizon, poison_reverse=split_horizon,
             )
+            #adversarial nodes rewrite their advertisement per recipient
+            if attacker:
+                ctx = attacks.AttackContext(
+                    node_id=node_id, recipient=neighbor_id, round=this_round,
+                    elapsed=time.time() - start_time, honest_table=table_copy,
+                )
+                advertisement = attacker.transform(advertisement, ctx)
             message = {
                 "type": "gossip",
                 "from": node_id,
