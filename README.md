@@ -86,6 +86,41 @@ All messages are JSON over UDP.
 | `status_request` | Observer asks a node for its current table; carries `reply_port` |
 | `status` | A node's reply to the observer (table, last-change time, gossip round) |
 
+## Adversarial nodes
+
+Any node can be made malicious from the config via an `attackers` block. Attack
+behaviors live in `attacks/`, a transport-free package: each attack is a pure
+`{dest: cost}` → `{dest: cost}` transform applied to a node's outgoing
+advertisement, so they are unit-testable and reused unchanged by the harness.
+Modes are **composable** (applied in order) and gated by a `start_round` so runs
+stay reproducible.
+
+| Mode | Effect |
+|------|--------|
+| `FALSE_COST` | Advertise an artificially low `cost` to `targets` (or all destinations) — route hijack / blackhole. |
+| `FALSE_TOPOLOGY` | Inject `fake` destinations/links (`{dest: cost}`) that don't exist. |
+| `FLAPPING` | Alternate advertised cost between `low`/`high` every `period` gossip rounds — induces instability. |
+| `SELECTIVE` | Apply `inner` attacks only toward `victims`; advertise honestly to everyone else (hardest to detect). |
+
+```json
+"attackers": {
+  "F": {
+    "start_round": 3,
+    "modes": [
+      {"type": "FALSE_COST", "targets": ["A", "E", "J"], "cost": 0}
+    ]
+  }
+}
+```
+
+```bash
+python3 launcher.py --config examples/attack_false_cost.json --seed 1
+# After round 3, neighbor C's table shows J at cost 1 via F (honest cost is 7).
+```
+
+See `examples/attack_false_cost.json`, `examples/attack_flapping.json`, and
+`examples/attack_selective.json`.
+
 ## Manual test checklist
 
 | Scenario | Command | Expected |
@@ -102,7 +137,7 @@ pip install -r requirements.txt
 python3 -m pytest -q
 ```
 
-Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poison-reverse advertisement construction, all-pairs shortest paths, multi-round distance-vector convergence, and the observer's convergence-detection logic.
+Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poison-reverse advertisement construction, all-pairs shortest paths, multi-round distance-vector convergence, the observer's convergence-detection logic, and every attack mode (including composition and start-round gating).
 
 ## Design decisions and tradeoffs
 
@@ -111,6 +146,8 @@ Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poiso
 - **Weighted links live in the config, costed once.** An undirected `links` list prevents the two endpoints of a link from disagreeing on cost, which a per-node neighbor map would allow.
 - **`INF` is a large integer, not `float('inf')`.** Poison-reverse advertisements stay valid JSON over the wire.
 - **Convergence measured two ways.** Live UDP wall-clock (noisy, reported as-is) plus deterministic round counts from the harness (seed-reproducible, later phase).
+- **Attacks are advertisement transforms, not special node code.** Modeling adversarial behavior as a pure transform on the outgoing vector keeps malice cleanly separated, composable, testable, and identical between the live sim and the harness. The node stays honest; only its advertisement is rewritten per recipient (which is also what makes the `SELECTIVE` attack possible).
+- **Attacks are gated and clocked by gossip round, not wall-clock.** `start_round` and `FLAPPING`'s `period` are expressed in gossip rounds so adversarial runs are reproducible.
 
 ## Next steps
 
@@ -120,6 +157,6 @@ Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poiso
 - [x] Weighted per-link costs and least-cost path calculation
 - [x] Split horizon with poison reverse (`--split-horizon`)
 - [x] Convergence detection (`observer.py`)
-- [ ] Adversarial node simulation (false cost/topology advertisement)
+- [x] Adversarial node simulation (false cost/topology, flapping, selective)
 - [ ] Cross-source gossip verification and anomaly detection
 - [ ] Detection accuracy benchmarking
