@@ -1,0 +1,18 @@
+{
+  "_comment": "Small cyclic, weighted topology for demonstrating least-cost routing (A->B is cheaper via C than direct) and count-to-infinity with/without split-horizon.",
+  "nodes": {
+    "A": {"port": 5001},
+    "B": {"port": 5002},
+    "C": {"port": 5003},
+    "D": {"port": 5004},
+    "E": {"port": 5005}
+  },
+  "links": [
+    {"a": "A", "b": "B", "cost": 5},
+    {"a": "A", "b": "C", "cost": 1},
+    {"a": "B", "b": "C", "cost": 1},
+    {"a": "C", "b": "D", "cost": 1},
+    {"a": "B", "b": "D", "cost": 1},
+    {"a": "D", "b": "E", "cost": 1}
+  ]
+}
