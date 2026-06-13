@@ -10,6 +10,7 @@ import sys
 import json
 import time
 import copy
+import signal
 
 GOSSIP_INTERVAL = 2
 HEARTBEAT_INTERVAL = 1
@@ -80,6 +81,10 @@ def handle_heartbeat(message):
     pass
 
 
+def handle_withdraw(message):
+    mark_neighbor_dead(message["from"])
+
+
 def handle_message(message):
     sender = message["from"]
     with lock:
@@ -90,6 +95,8 @@ def handle_message(message):
         handle_gossip(message)
     elif message["type"] == "heartbeat":
         handle_heartbeat(message)
+    elif message["type"] == "withdraw":
+        handle_withdraw(message)
 
 
 def purge_routes_via(dead_id):
@@ -186,7 +193,16 @@ def listen():
         handle_message(message)
 
 
-#start the listen, gossip, heartbeat, and monitor threads. 
+def on_sigterm(signum, frame):
+    message = {"type": "withdraw", "from": node_id}
+    for neighbor_id in get_neighbors():
+        send_to(neighbor_id, message)
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, on_sigterm)
+
+#start the listen, gossip, heartbeat, and monitor threads.
 threading.Thread(target=listen, daemon=True).start()
 threading.Thread(target=gossip, daemon=True).start()
 threading.Thread(target=heartbeat, daemon=True).start()
