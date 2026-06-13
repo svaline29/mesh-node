@@ -79,8 +79,24 @@ traffic-attracting / blackhole direction).
   bounds), `SELECTIVE` toward non-victims (the observer correctly sees honesty),
   phantom destinations that **no** honest neighbor advertises (no reference `m`).
 
-**(d) Expected failure mode.** The bound is loose (`link(n)+link(m)` overestimates
-`d(n,m)`), so small lies slip under it → modest recall on subtle `FALSE_COST`.
+**(d) Expected failure mode — and the experiment it motivates.** The bound is
+loose (`link(n)+link(m)` overestimates `d(n,m)`), so a lie smaller than the slack
+slips under it. This is **not a flaw to apologize for — it is the reason
+Detector 2 exists**, and we measure it rather than assert it:
+
+- The plausibility detector catches **gross** lies at **zero static
+  false-positive rate** (it is a sound bound).
+- Its **miss-rate as a function of lie magnitude** is the lower edge of the
+  impact-vs-detectability frontier: below the geometric slack, only the
+  statistical detector can catch the lie, and only at some false-positive cost.
+
+**Harness requirement (Phase 4):** sweep lie magnitude (e.g. advertise a target
+at true_cost − δ for a range of δ) and plot **per-detector** detection vs δ, so
+the handoff is explicit: "hard bound covers δ above the slack at 0 FP; the
+statistical detector extends coverage to small δ at some FP." The harness must
+therefore be able to score and report each detector **in isolation**, not only
+the ensemble.
+
 It is also defeated by **collusion**: if the reference-maximizing neighbor `m` is
 itself an accomplice lying low, `B_n(D)` collapses and the violation disappears.
 Requires ≥2 neighbors sharing a destination.
@@ -94,10 +110,11 @@ access to the rest of the network, so the path costs `P_n(D)` should **cluster**
 no single source should be a persistent, large, unilateral low-outlier across
 many destinations. (Soft consensus, in contrast to Detector 1's hard bound.)
 
-**(b) Suspicion score.** Using a leave-one-out median to avoid self-masking:
+**(b) Suspicion score.** The reference distribution for scoring `n` is computed
+**with `n` removed** — a leave-one-out (LOO) median:
 
 ```
-consensus_{-n}(D) = median over m != n of P_m(D)
+consensus_{-n}(D) = median over m != n of P_m(D)     # n excluded from its own baseline
 
 cross_source(n) = mean over D of  max(0, consensus_{-n}(D) - P_n(D))
 ```
@@ -106,6 +123,20 @@ plus an *uncorroborated-destination* term: any `D` advertised by `n` alone (no
 other neighbor offers `D`) contributes `adv_n(D)`-weighted suspicion, since there
 is no second source to corroborate it. Lying low across many destinations (a
 blackhole) yields a large, broad score.
+
+*Why LOO, and why median (the interview answer).* The reference distribution
+must be robust to the attacker influencing it. If the node under evaluation were
+included in its own baseline, a single aggressive liar would drag the baseline
+toward itself and partially mask its own deviation — the bug that makes detection
+look better or worse than reality. Excluding `n` (LOO) denies the attacker any
+vote in its own reference. Using the **median** (rather than the mean) over the
+remaining witnesses adds a second layer: it tolerates up to ~50% of the *other*
+witnesses being corrupt before the reference itself is compromised, which is also
+exactly why collusion (a corrupt majority of witnesses) is the documented
+breaking point. A trimmed mean is an acceptable equivalent. **This LOO-median is a
+correctness requirement of the implementation, not just prose: a unit test will
+assert that a lone liar cannot lower its own reference (i.e. scoring with vs.
+without LOO differs, and the LOO score is the larger/correct one).**
 
 **(c) Should / should not catch.**
 - *Should:* `FALSE_COST` / blackhole (the canonical low-outlier), `FALSE_TOPOLOGY`
@@ -174,6 +205,56 @@ individually so the harness can measure each detector's marginal contribution.
 Output is a **continuous score** (never a binary), so the harness can sweep a
 threshold and produce ROC / precision–recall curves. Global per-node suspicion is
 the aggregate of `suspicion(n)` over the honest observers that neighbor `n`.
+
+## Coverage closure (the clean claim)
+
+The division of labor is designed to leave exactly one documented gap:
+
+- **Cost-lowering lies** (`FALSE_COST`, the cost-lowering part of `SELECTIVE`):
+  gross → Detector 1; subtle → Detector 2 (with nonzero score down to arbitrarily
+  small δ, detectability set by threshold per the magnitude sweep above).
+- **Phantom destinations/links** (`FALSE_TOPOLOGY`): uncorroborated-destination
+  term in Detector 2.
+- **Oscillation** (`FLAPPING`): Detector 3.
+- **Selective lies**: caught by whichever of 1/2 applies, *provided the observer
+  is a victim and has another honest neighbor* — otherwise the lie isn't visible
+  to that observer at all (correct: there is nothing to detect locally).
+
+Checking for an attack that falls between all three — a lie that is
+simultaneously **constant** (evades Detector 3), **geometrically legal** (evades
+Detector 1's bound), **and well-corroborated** (evades Detector 2's consensus):
+to be well-corroborated the lie must agree with the LOO consensus of the *other*
+witnesses, which requires those other witnesses to back it — i.e. **collusion**.
+A *single* liar cannot simultaneously deviate enough to perturb routing and match
+a consensus computed with itself excluded; any routing-perturbing deviation
+yields a positive cross-source score.
+
+**Claim we will defend:** *every non-colluding lie that perturbs routing produces
+a positive score in at least one detector; the only undetected attack classes are
+(i) collusion — a corrupt majority of a victim's witnesses — and (ii) a liar with
+no honest neighbor to observe it.* Both are structural Byzantine limits, stated
+deliberately, not accidents. The harness will verify (i) by showing cross-source
+recall collapsing as collusion grows 1→2→3.
+
+## Parameters and the no-test-set-tuning guarantee
+
+To avoid re-introducing hardcoding "through the back door," the detectors have
+**no free parameters fit to the attack scenarios**:
+
+- The only knob that trades true- vs false-positives is the **global suspicion
+  threshold**, and it is never fixed — the ROC/PR analysis **sweeps** it.
+- The few **structural** constants (temporal window `W`, median/trim choice,
+  equal ensemble weights) are set from protocol/first-principles reasoning
+  (e.g. `W` from gossip-round dynamics), **not** optimized against the attack
+  set. Ensemble **weights are fixed and equal**; they are a presentation choice,
+  not a tuned parameter.
+- The ROC analysis reports **each detector's score separately**; the ensemble is
+  combined only for a single headline number. So the combination cannot launder a
+  tuned-to-the-test-set parameter.
+
+Interview answer to "did you tune this to your own test cases?": *the detectors
+have no parameters fit to the attacks; the only swept knob is the decision
+threshold, and each detector is also reported standalone.*
 
 ## Implementation plan (after approval)
 
