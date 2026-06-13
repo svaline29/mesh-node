@@ -28,10 +28,12 @@ from .false_cost import FalseCost
 from .false_topology import FalseTopology
 from .flapping import Flapping
 from .selective import Selective
+from .collusion import Collusion
 
 __all__ = [
     "Attack", "AttackContext", "FalseCost", "FalseTopology", "Flapping",
-    "Selective", "Attacker", "build_attack", "from_config",
+    "Selective", "Collusion", "Attacker", "build_attack", "from_config",
+    "malicious_nodes", "colluding_groups",
 ]
 
 
@@ -53,6 +55,13 @@ def build_attack(spec):
         return Selective(
             victims=spec.get("victims"),
             inner=[build_attack(s) for s in spec.get("inner", [])],
+        )
+    if kind == "COLLUSION":
+        return Collusion(
+            group=spec.get("group", []),
+            targets=spec.get("targets", []),
+            cost=spec.get("cost", 0),
+            vouch_cost=spec.get("vouch_cost", 1),
         )
     raise ValueError(f"unknown attack type: {spec['type']!r}")
 
@@ -91,3 +100,30 @@ def from_config(config, node_id):
     if not chain:
         return None
     return Attacker(node_id, chain, start_round=spec.get("start_round", 0))
+
+
+def malicious_nodes(config):
+    """Ground-truth set of malicious node ids declared in the config."""
+    return set(config.get("attackers", {}))
+
+
+def colluding_groups(config):
+    """Declared collusion groups as a list of frozensets.
+
+    Derived from every ``COLLUSION`` mode's ``group`` field, unioned with the
+    node that declares it. Useful for the harness to score detection against a
+    known colluding set and to sweep collusion size.
+    """
+    groups = []
+    for node_id, spec in config.get("attackers", {}).items():
+        for mode in spec.get("modes", []):
+            if mode.get("type", "").upper() == "COLLUSION":
+                members = set(mode.get("group", [])) | {node_id}
+                groups.append(frozenset(members))
+    # de-duplicate identical groups while preserving order
+    seen, unique = set(), []
+    for g in groups:
+        if g not in seen:
+            seen.add(g)
+            unique.append(g)
+    return unique
