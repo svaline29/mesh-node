@@ -119,10 +119,15 @@ consensus_{-n}(D) = median over m != n of P_m(D)     # n excluded from its own b
 cross_source(n) = mean over D of  max(0, consensus_{-n}(D) - P_n(D))
 ```
 
-plus an *uncorroborated-destination* term: any `D` advertised by `n` alone (no
-other neighbor offers `D`) contributes `adv_n(D)`-weighted suspicion, since there
-is no second source to corroborate it. Lying low across many destinations (a
-blackhole) yields a large, broad score.
+For a destination advertised by only **one** of the observer's neighbors there is
+no second source, so cross-source **abstains** for that `(n, D)` rather than
+guessing. This is deliberate: in sparse/tree topologies most legitimate
+destinations are reachable through a single neighbor (a pendant), so a
+"single-source ⇒ suspicious" rule would false-positive on normal topology. The
+consequence is stated under coverage closure: a *pure* phantom pendant
+(`FALSE_TOPOLOGY` inventing a brand-new id reachable only via the attacker) is
+locally indistinguishable from a legitimate pendant and is therefore **not**
+caught here — but it also redirects no real traffic.
 
 *Why LOO, and why median (the interview answer).* The reference distribution
 must be robust to the attacker influencing it. If the node under evaluation were
@@ -139,9 +144,11 @@ assert that a lone liar cannot lower its own reference (i.e. scoring with vs.
 without LOO differs, and the LOO score is the larger/correct one).**
 
 **(c) Should / should not catch.**
-- *Should:* `FALSE_COST` / blackhole (the canonical low-outlier), `FALSE_TOPOLOGY`
-  (phantom destinations are uncorroborated), `SELECTIVE` **when the observer is a
-  victim and has another honest neighbor** to compare against.
+- *Should:* `FALSE_COST` / blackhole (the canonical low-outlier); `FALSE_TOPOLOGY`
+  **only when the false route shadows a real, corroborated destination at an
+  implausibly low cost** (then it is just a low-outlier / geometry violation);
+  `SELECTIVE` **when the observer is a victim and has another honest neighbor** to
+  compare against.
 - *Should not — by design:* `COLLUSION`. When ≥2 of the compared sources collude
   and agree, they *become* (or shift) the consensus, so the low-outlier signal
   vanishes. This is precisely the detector we expect collusion to defeat, and the
@@ -150,7 +157,8 @@ without LOO differs, and the LOO score is the larger/correct one).**
 **(d) Expected failure mode.** Collusion (fabricated consensus); needs ≥3 sources
 for a meaningful leave-one-out median (with 2 neighbors there is no majority);
 soft threshold can false-positive when honest topology genuinely gives one
-neighbor much cheaper access (legitimate asymmetry).
+neighbor much cheaper access (legitimate asymmetry); and pure phantom pendants
+are invisible (see closure).
 
 ---
 
@@ -213,8 +221,12 @@ The division of labor is designed to leave exactly one documented gap:
 - **Cost-lowering lies** (`FALSE_COST`, the cost-lowering part of `SELECTIVE`):
   gross → Detector 1; subtle → Detector 2 (with nonzero score down to arbitrarily
   small δ, detectability set by threshold per the magnitude sweep above).
-- **Phantom destinations/links** (`FALSE_TOPOLOGY`): uncorroborated-destination
-  term in Detector 2.
+- **Phantom routes to real destinations** (`FALSE_TOPOLOGY` that shadows an
+  existing, corroborated destination cheaply): low-outlier in Detector 2 /
+  geometry violation in Detector 1. A *pure phantom pendant* (a brand-new id
+  reachable only via the attacker) is **not** caught locally — but it redirects
+  no real traffic (the destination does not exist), so it is table pollution, a
+  different threat class from a hijack.
 - **Oscillation** (`FLAPPING`): Detector 3.
 - **Selective lies**: caught by whichever of 1/2 applies, *provided the observer
   is a victim and has another honest neighbor* — otherwise the lie isn't visible
@@ -229,12 +241,22 @@ A *single* liar cannot simultaneously deviate enough to perturb routing and matc
 a consensus computed with itself excluded; any routing-perturbing deviation
 yields a positive cross-source score.
 
-**Claim we will defend:** *every non-colluding lie that perturbs routing produces
-a positive score in at least one detector; the only undetected attack classes are
-(i) collusion — a corrupt majority of a victim's witnesses — and (ii) a liar with
-no honest neighbor to observe it.* Both are structural Byzantine limits, stated
-deliberately, not accidents. The harness will verify (i) by showing cross-source
-recall collapsing as collusion grows 1→2→3.
+**Claim we will defend:** *every non-colluding lie that redirects real traffic
+toward the attacker produces a positive score in at least one detector.* The
+documented undetected classes are structural, not accidental:
+
+1. **Collusion** — a corrupt majority of a victim's witnesses fabricates the
+   consensus (Detector 2's stated limit; the harness shows recall collapsing as
+   the group grows 1→2→3).
+2. **No honest neighbor** — a node observed by no honest node cannot be scored.
+3. **Pure phantom pendants** — `FALSE_TOPOLOGY` inventing a brand-new id behind
+   the attacker is locally indistinguishable from a legitimate pendant; it is
+   table pollution, not a traffic hijack.
+
+Note the precise scope: the claim is about lies that **redirect traffic** (the
+`FALSE_COST`/blackhole/selective family), which is the threat the routing layer
+actually cares about. A unit test will assert each of (1)–(3) so the limits are
+demonstrated, not just asserted.
 
 ## Parameters and the no-test-set-tuning guarantee
 
