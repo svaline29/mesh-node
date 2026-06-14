@@ -57,7 +57,7 @@ class SimulationResult:
 
 
 def simulate(topology, attackers=None, split_horizon=True, max_rounds=200,
-             stop_when_stable=True):
+             stop_when_stable=True, min_rounds=1):
     """Run the deterministic gossip simulation.
 
     Args:
@@ -67,6 +67,11 @@ def simulate(topology, attackers=None, split_horizon=True, max_rounds=200,
         max_rounds: hard cap on rounds.
         stop_when_stable: stop early once a round produces no table change
             (won't trigger under flapping, which never stabilizes).
+        min_rounds: never early-stop before this round. Used to run through a
+            warmup-then-attack schedule: with attackers gated to ``start_round``,
+            set ``min_rounds > start_round`` so the run does not stop at the
+            pre-attack honest convergence but continues until it re-converges
+            under attack.
 
     Returns:
         :class:`SimulationResult`.
@@ -113,7 +118,7 @@ def simulate(topology, attackers=None, split_horizon=True, max_rounds=200,
 
         if not changed:
             converged_round = r
-            if stop_when_stable:
+            if stop_when_stable and r >= min_rounds:
                 break
 
     return SimulationResult(
