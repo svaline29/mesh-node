@@ -23,7 +23,7 @@ python3 observer.py --config config.json --json
 # -> {"converged": true, "wall_clock_seconds": 10.9, "gossip_rounds": 7, "nodes": 10}
 ```
 
-Live UDP convergence timing is inherently noisy (OS scheduling, thread timing); it is reported as a measured datapoint. Fully seed-reproducible convergence counts come from the deterministic offline harness (planned for a later phase).
+Live UDP convergence timing is inherently noisy (OS scheduling, thread timing); it is reported as a measured datapoint. Fully seed-reproducible convergence counts come from the deterministic offline harness (see [Benchmarking harness](#benchmarking-harness)).
 
 Nodes detect failed neighbors via heartbeat timeout (5 seconds). When a neighbor dies or sends a withdraw message, the node purges routes through that neighbor and propagates the failure via gossip. New nodes join at runtime by sending a hello message to bootstrap neighbors.
 
@@ -160,6 +160,84 @@ threshold, and each detector is also reported standalone (for ROC analysis in th
 harness). The clean claim, with its three structural limits (collusion, no-honest-
 neighbor, pure phantom pendants), is stated and unit-tested per the design note.
 
+## Benchmarking harness
+
+The harness (`harness/`) is a deterministic, seed-reproducible, round-based
+simulation that reuses the **exact** `routing`, `attacks`, and `detectors`
+modules from the live system — no UDP, no threads — so it measures the identical
+logic that runs over the wire. It runs trials with known ground truth and emits
+CSVs and matplotlib figures.
+
+```bash
+pip install -r requirements.txt
+python3 -m harness.run                  # full run -> results/
+python3 -m harness.run --quick          # fast, smaller run for iteration
+python3 -m harness.run --only frontier  # just the headline experiment
+```
+
+### Headline figure: the impact-vs-detectability frontier
+
+The `FALSE_COST` attacker is parameterized by **lie intensity** — a shave
+fraction from 0 (honest) to 1 (a zero-cost blackhole) applied to its true cost.
+For each intensity, across many random topologies, the harness measures two
+things and plots one against the other (`results/impact_vs_detectability.png`):
+
+- **Impact** (x-axis): the fraction of honest source→destination demand whose
+  converged route passes through the attacker — the traffic it attracts/hijacks.
+- **Detectability** (y-axis): the probability the attacker is flagged at a
+  decision threshold pinned to a honest false-positive rate ≤ 5%.
+
+The frontier makes the core tension explicit: **to raise impact the attacker must
+lie harder, and lying harder makes it more detectable.** The curve is shown per
+detector plus the ensemble, exposing the gross→subtle handoff — the hard
+geometric bound (`plausibility`) fires at zero false-positive cost once the lie
+clears its slack, while the statistical detector (`cross_source`) extends
+coverage and provides an independent signal. The smallest lies sit in the
+lower-left (low impact, evade both); the gross lies sit in the upper-right.
+
+### Measurement conventions (and why)
+
+- **Warmup, then attack.** Each trial first runs the honest network to
+  convergence; the attack activates at `onset = honest_converged + 1`.
+- **Impact is measured at the post-attack steady state** — the eventual hijacked
+  traffic share.
+- **Detectability is measured at attack onset** — the round the lie first
+  appears, before false routes propagate. This is deliberate and important: a
+  distance-vector lie *propagates*, and by full convergence the poison has
+  homogenized the neighborhood, so the attacker is no longer a local outlier and
+  honest relayers carrying the poison look just as anomalous. Onset is the moment
+  of maximal cross-source contrast and the lowest-latency detection point — the
+  honest place to ask "can this be caught?". (`test_gross_lie_homogenizes_by_convergence`
+  pins this regime down.)
+- **Thresholds are calibrated on honest scores only** — a per-detector threshold
+  holding honest FPR ≤ 5%, reused unchanged across every intensity. No detector
+  constant is fit to the attacks; the threshold is the single swept knob. Each
+  detector is also reported standalone (ROC), and the ensemble is recombined from
+  raw per-detector scores using honest-only scales, so the combination is a
+  presentation choice rather than a tuned-to-the-test-set parameter.
+
+### Other experiments
+
+- **Collusion sweep** (`results/collusion_recall.png`). Colluders tell the
+  identical *plausible* undercut (sized to stay above the geometric bound, so the
+  hard detector cannot rescue it) to a shared target, corrupting the leave-one-out
+  median of a common honest observer. Recall on the colluders collapses as the
+  group reaches a local majority (≈ 1.0 → 1.0 → 0.4 for sizes 1/2/3), quantifying
+  the Byzantine threshold honestly: cross-source consistency is a majority
+  argument and collusion is its documented limit.
+- **ROC by detector** (`results/roc.png`). Per-detector and ensemble ROC at a
+  representative intensity, with AUC. `temporal` sits at chance for a constant
+  lie (correct — it is the flapping detector).
+- **Honest convergence vs network size** (`results/convergence_vs_size.png`).
+  Gossip rounds to global convergence as the network grows, split horizon on vs
+  off. The two coincide for cold-start convergence — split horizon's benefit is
+  preventing count-to-infinity on topology *changes*, not speeding up initial
+  convergence.
+
+All figures have matching CSVs (`frontier.csv`, `collusion.csv`, `roc.csv`,
+`roc_auc.csv`, `convergence.csv`) and a `summary.json` recording the config,
+calibrated thresholds, and timings. Everything is driven by a single `--seed`.
+
 ## Manual test checklist
 
 | Scenario | Command | Expected |
@@ -176,7 +254,7 @@ pip install -r requirements.txt
 python3 -m pytest -q
 ```
 
-Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poison-reverse advertisement construction, all-pairs shortest paths, multi-round distance-vector convergence, the observer's convergence-detection logic, every attack mode (including composition and start-round gating), and every detector (planted lies, leave-one-out reference, collusion collapse, and the documented structural limits).
+Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poison-reverse advertisement construction, all-pairs shortest paths, multi-round distance-vector convergence, the observer's convergence-detection logic, every attack mode (including composition and start-round gating), every detector (planted lies, leave-one-out reference, collusion collapse, and the documented structural limits), and the harness itself (the simulator reproduces Bellman-Ford shortest paths in the honest case; impact tracing, ROC, AUC, and the fixed-FPR operating point are checked on hand-computed inputs; the onset-vs-steady-state detectability regime is pinned down).
 
 ## Design decisions and tradeoffs
 
@@ -184,7 +262,7 @@ Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poiso
 - **Recompute over incremental merge.** Each node recomputes its whole table from cached neighbor vectors every round instead of merging updates in place. This is slightly more work per round but is provably correct for weighted least-cost paths (the previous in-place merge pinned direct neighbors at cost 1 and could miss cheaper indirect routes).
 - **Weighted links live in the config, costed once.** An undirected `links` list prevents the two endpoints of a link from disagreeing on cost, which a per-node neighbor map would allow.
 - **`INF` is a large integer, not `float('inf')`.** Poison-reverse advertisements stay valid JSON over the wire.
-- **Convergence measured two ways.** Live UDP wall-clock (noisy, reported as-is) plus deterministic round counts from the harness (seed-reproducible, later phase).
+- **Convergence measured two ways.** Live UDP wall-clock (noisy, reported as-is) plus deterministic round counts from the harness (seed-reproducible).
 - **Attacks are advertisement transforms, not special node code.** Modeling adversarial behavior as a pure transform on the outgoing vector keeps malice cleanly separated, composable, testable, and identical between the live sim and the harness. The node stays honest; only its advertisement is rewritten per recipient (which is also what makes the `SELECTIVE` attack possible).
 - **Attacks are gated and clocked by gossip round, not wall-clock.** `start_round` and `FLAPPING`'s `period` are expressed in gossip rounds so adversarial runs are reproducible.
 - **Collusion is modeled explicitly, not hidden.** Cross-source consistency is fundamentally a majority argument and can be overwhelmed by a coordinated minority. Rather than pretend otherwise, the `COLLUSION` mode and matched size-1/2/3 scenarios let the harness quantify where detection breaks down (the Byzantine threshold).
@@ -200,4 +278,4 @@ Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poiso
 - [x] Convergence detection (`observer.py`)
 - [x] Adversarial node simulation (false cost/topology, flapping, selective, collusion)
 - [x] Cross-source gossip verification and anomaly detection (`detectors/`)
-- [ ] Detection accuracy benchmarking
+- [x] Detection accuracy benchmarking (`harness/`: impact-vs-detectability frontier, collusion sweep, ROC, convergence scaling)
