@@ -133,6 +133,33 @@ group grows — i.e. characterize the Byzantine threshold honestly rather than
 claiming robustness the system doesn't have. `attacks.malicious_nodes()` and
 `attacks.colluding_groups()` expose the ground truth for scoring.
 
+## Detection
+
+Anomaly detectors live in `detectors/`, a transport-free package. Each detector
+runs from the vantage of an honest node and sees **only what that node sees at
+runtime**: its own trusted link costs and the history of distance vectors its
+direct neighbors have gossiped. They reference no attacker config, no node IDs,
+and no attack modes; the full design rationale is in
+[`docs/detector_design.md`](docs/detector_design.md).
+
+Because an adversary manipulates its own outgoing advertisement, the
+inconsistency surfaces in the vector attributed to it and is seen by its honest
+neighbors, so each detector scores the observer's direct neighbors and the
+harness aggregates into global per-node scores.
+
+| Detector | Invariant it relies on | Catches | Documented limit |
+|----------|------------------------|---------|------------------|
+| `plausibility` | triangle inequality on the observer's trusted links (hard bound, no static false positives) | gross low-cost lies | misses lies below the geometric slack |
+| `cross_source` | path costs via comparable neighbors should cluster; uses a **leave-one-out median** so an attacker can't bias its own baseline | blackholes / subtle low-cost lies, selective lies | **collusion** (a corrupt majority fabricates the consensus) |
+| `temporal` | honest costs are piecewise-constant; change rate ≤ churn baseline | flapping | constant lies (left to the others) |
+
+Each emits a **continuous** score (never a binary); the ensemble is a fixed,
+**equal-weight** combination used only for a headline number. No weight or
+constant is fit to the attack scenarios — the only swept knob is the decision
+threshold, and each detector is also reported standalone (for ROC analysis in the
+harness). The clean claim, with its three structural limits (collusion, no-honest-
+neighbor, pure phantom pendants), is stated and unit-tested per the design note.
+
 ## Manual test checklist
 
 | Scenario | Command | Expected |
@@ -149,7 +176,7 @@ pip install -r requirements.txt
 python3 -m pytest -q
 ```
 
-Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poison-reverse advertisement construction, all-pairs shortest paths, multi-round distance-vector convergence, the observer's convergence-detection logic, and every attack mode (including composition and start-round gating).
+Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poison-reverse advertisement construction, all-pairs shortest paths, multi-round distance-vector convergence, the observer's convergence-detection logic, every attack mode (including composition and start-round gating), and every detector (planted lies, leave-one-out reference, collusion collapse, and the documented structural limits).
 
 ## Design decisions and tradeoffs
 
@@ -161,6 +188,7 @@ Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poiso
 - **Attacks are advertisement transforms, not special node code.** Modeling adversarial behavior as a pure transform on the outgoing vector keeps malice cleanly separated, composable, testable, and identical between the live sim and the harness. The node stays honest; only its advertisement is rewritten per recipient (which is also what makes the `SELECTIVE` attack possible).
 - **Attacks are gated and clocked by gossip round, not wall-clock.** `start_round` and `FLAPPING`'s `period` are expressed in gossip rounds so adversarial runs are reproducible.
 - **Collusion is modeled explicitly, not hidden.** Cross-source consistency is fundamentally a majority argument and can be overwhelmed by a coordinated minority. Rather than pretend otherwise, the `COLLUSION` mode and matched size-1/2/3 scenarios let the harness quantify where detection breaks down (the Byzantine threshold).
+- **Detectors reason from invariants, not signatures.** They see only the data an honest node has at runtime and have no parameters fit to the attacks; the only swept knob is the decision threshold. The cross-source reference is a **leave-one-out median** specifically so the attacker cannot bias its own baseline, and the hard plausibility bound is sound (zero static false positives) by construction. The loose-bound gap is a deliberate, measured handoff to the statistical detector, not a flaw.
 
 ## Next steps
 
@@ -171,5 +199,5 @@ Covers weighted Bellman-Ford (least-cost vs. fewest-hops), split-horizon / poiso
 - [x] Split horizon with poison reverse (`--split-horizon`)
 - [x] Convergence detection (`observer.py`)
 - [x] Adversarial node simulation (false cost/topology, flapping, selective, collusion)
-- [ ] Cross-source gossip verification and anomaly detection
+- [x] Cross-source gossip verification and anomaly detection (`detectors/`)
 - [ ] Detection accuracy benchmarking
