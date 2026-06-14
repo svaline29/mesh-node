@@ -34,6 +34,16 @@ def test_false_cost_all_destinations_when_no_targets():
     assert ad["F"] == 0  # self stays 0 (skipped, but already 0)
 
 
+def test_false_cost_shave_fraction_scales_with_true_cost():
+    from attacks.base import AttackContext
+    c = AttackContext(node_id="F", recipient="C", round=5,
+                      honest_table={"J": {"cost": 10, "next_hop": "H"}})
+    # shave 0 -> honest (10); shave 1 -> blackhole (0); shave 0.5 -> 5
+    assert attacks.FalseCost(targets=["J"], shave_fraction=0.0).apply({}, c)["J"] == 10
+    assert attacks.FalseCost(targets=["J"], shave_fraction=1.0).apply({}, c)["J"] == 0
+    assert attacks.FalseCost(targets=["J"], shave_fraction=0.5).apply({}, c)["J"] == 5
+
+
 def test_false_cost_never_lies_about_self():
     atk = attacks.FalseCost(cost=99, targets=["F"])
     ad = atk.apply(HONEST, ctx())

@@ -41,7 +41,8 @@ def build_attack(spec):
     """Construct a single :class:`Attack` from a config ``mode`` spec dict."""
     kind = spec["type"].upper()
     if kind == "FALSE_COST":
-        return FalseCost(cost=spec.get("cost", 0), targets=spec.get("targets"))
+        return FalseCost(cost=spec.get("cost", 0), targets=spec.get("targets"),
+                         shave_fraction=spec.get("shave_fraction"))
     if kind == "FALSE_TOPOLOGY":
         return FalseTopology(fake=spec.get("fake", {}))
     if kind == "FLAPPING":
